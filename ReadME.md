@@ -62,33 +62,49 @@ InterestMap/
 
 ## System Architecture
 
+```mermaid
+flowchart LR
+    User([User]) -->|title + type + notes| GUI[Streamlit app.py]
+    GUI -->|extract_tags| Tagger[lib/tagger.py]
+    Tagger -->|genres moods themes countries| GUI
+    GUI -->|add_interest| Recommender[lib/recommender.py]
+    Recommender -->|MERGE nodes + relationships| Neo4j[(Neo4j Aura)]
+    Neo4j -->|Cypher traversal| Recommender
+    Recommender -->|title type score reasons| GUI
+    GUI -->|recommendation cards| User
 ```
-User enters interest (title + media type + optional notes)
-         │
-         ▼
-  lib/tagger.py
-  extract_tags()
-  Rule-based extraction → genres, moods, themes, countries
-         │
-         ▼
-  lib/recommender.py
-  add_interest()
-  MERGE User → LIKES → Item → HAS_GENRE/HAS_MOOD/HAS_THEME/FROM_COUNTRY → tag nodes
-         │
-         ▼
-  Neo4j Aura (NEO4J_DATABASE from .env)
-  Graph stored as: User → Item → Tag nodes
-         │
-         ▼
-  lib/recommender.py
-  get_recommendations()
-  Cypher traversal: liked items → shared tags → candidate items
-  Score = count of shared distinct tags
-  Returns: title, type, score, reasons[]
-         │
-         ▼
-  app.py (Streamlit)
-  Renders recommendation cards with score + reason chips
+
+### Graph data model
+
+```mermaid
+erDiagram
+    User ||--o{ Item : LIKES
+    Item ||--o{ Genre : HAS_GENRE
+    Item ||--o{ Mood : HAS_MOOD
+    Item ||--o{ Theme : HAS_THEME
+    Item ||--o{ Country : FROM_COUNTRY
+    Item ||--o{ Item : SIMILAR_TO
+
+    User {
+        string id
+    }
+    Item {
+        string title
+        string title_key
+        string type
+    }
+    Genre {
+        string name
+    }
+    Mood {
+        string name
+    }
+    Theme {
+        string name
+    }
+    Country {
+        string name
+    }
 ```
 
 ---
