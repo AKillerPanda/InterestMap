@@ -38,6 +38,13 @@ def render_tag_block(title: str, values: list[str]) -> None:
     st.write(", ".join(values) if values else "None yet")
 
 
+def render_tag_chips(values: list[str]) -> None:
+    if not values:
+        st.write("None yet")
+        return
+    st.markdown(" ".join(f"`{value}`" for value in values))
+
+
 def build_recommendation_summary(recommendations: list[dict]) -> tuple[list[tuple[str, int]], str]:
     reason_counts = Counter(
         reason
@@ -62,41 +69,27 @@ st.write(
     "TasteGraph maps what you love across books, shows, manga, films, and music "
     "and recommends related items with clear reasons."
 )
-st.caption(
-    "Build a taste graph, seed the demo profile, then inspect why each recommendation matches."
-)
+st.caption("Add interests, build your graph, and see exactly why each recommendation appears.")
 
 with st.sidebar:
     st.header("TasteGraph Controls")
-    user_id = st.text_input("Demo user id", value="demo-user")
+    user_id = st.text_input("User id", value="demo-user")
     recommendation_limit = st.slider("Recommendation count", min_value=3, max_value=10, value=5)
-    seed_demo = st.button("Load demo graph")
-    refresh_recommendations = st.button("Get recommendations")
+    seed_demo = st.button("Load demo graph", use_container_width=True)
+    refresh_recommendations = st.button("Refresh recommendations", use_container_width=True)
     reset_demo = st.button("Reset demo user")
-
-    st.divider()
-    st.header("Add an interest")
-    title = st.text_input("Title", placeholder="Reply 1988")
-    media_type = st.selectbox("Media type", MEDIA_TYPES, format_func=format_media_type)
-    genre_hint = st.text_input("Optional genre", placeholder="drama")
-    mood_hint = st.text_input("Optional mood", placeholder="nostalgic")
-    theme_hint = st.text_input("Optional theme", placeholder="friendship")
-    notes = st.text_area(
-        "Notes",
-        placeholder="emotionally grounded, coming-of-age, soft romance",
-        height=120,
-    )
-    submit = st.button("Add to TasteGraph", type="primary")
+    st.caption("Tip: Load demo graph first if this user is empty.")
 
 connection_ok = test_connection()
 graph_summary = get_graph_summary(user_id)
 active_database = get_database_name()
 recommendation_error = None
+
 if connection_ok:
     database_label = f" ({active_database})" if active_database else ""
-    st.success(f"Neo4j connection is available{database_label}.")
+    st.success(f"Connected to Neo4j{database_label}")
 else:
-    st.warning("Neo4j is not connected yet. Showing the local demo fallback.")
+    st.warning("Neo4j is not connected. You can still explore fallback recommendations.")
 
 if graph_summary["source"] == "neo4j":
     st.caption(
@@ -136,6 +129,27 @@ if reset_demo:
     except Exception as error:
         st.error(f"Could not reset demo user: {error}")
 
+if refresh_recommendations:
+    st.rerun()
+
+st.subheader("Add an interest")
+with st.form("add_interest_form", clear_on_submit=False):
+    form_left, form_right = st.columns([1.1, 1])
+    with form_left:
+        title = st.text_input("Title", placeholder="Reply 1988")
+        media_type = st.selectbox("Media type", MEDIA_TYPES, format_func=format_media_type)
+        notes = st.text_area(
+            "Notes",
+            placeholder="emotionally grounded, coming-of-age, soft romance",
+            height=120,
+        )
+    with form_right:
+        st.caption("Optional hints (improves tag extraction)")
+        genre_hint = st.text_input("Genre", placeholder="drama")
+        mood_hint = st.text_input("Mood", placeholder="nostalgic")
+        theme_hint = st.text_input("Theme", placeholder="friendship")
+    submit = st.form_submit_button("Add to TasteGraph", type="primary", use_container_width=True)
+
 if submit:
     if not title.strip():
         st.error("Enter a title before adding it to the graph.")
@@ -147,13 +161,11 @@ if submit:
             st.success(f"Saved {title} to TasteGraph.")
             st.session_state["last_tags"] = tags
             st.session_state["last_title"] = title
+            st.rerun()
         except Exception as error:
             st.error(f"Could not save interest: {error}")
             st.session_state["last_tags"] = tags
             st.session_state["last_title"] = title
-
-if refresh_recommendations:
-    st.rerun()
 
 try:
     recommendations = get_recommendations(user_id=user_id, limit=recommendation_limit)
@@ -165,15 +177,17 @@ if recommendation_error:
     st.error(recommendation_error)
 
 top_reasons, recommendation_summary = build_recommendation_summary(recommendations)
+best_score = max((item["score"] for item in recommendations), default=0)
 
-status_col, count_col, score_col = st.columns(3)
+status_col, count_col, score_col, likes_col = st.columns(4)
 with status_col:
-    st.metric("Data source", graph_summary["source"].upper())
+    st.metric("Source", graph_summary["source"].upper())
 with count_col:
     st.metric("Recommendations", len(recommendations))
 with score_col:
-    best_score = max((item["score"] for item in recommendations), default=0)
     st.metric("Top score", best_score)
+with likes_col:
+    st.metric("Liked items", graph_summary.get("liked_items", 0))
 
 profile_col, explanation_col = st.columns([1.1, 1])
 
@@ -184,37 +198,47 @@ with profile_col:
             st.markdown(f"### Last added: {st.session_state['last_title']}")
         profile = st.session_state.get("last_tags")
         if profile:
-            render_tag_block("Genres", profile.get("genres", []))
-            render_tag_block("Moods", profile.get("moods", []))
-            render_tag_block("Themes", profile.get("themes", []))
-            render_tag_block("Countries", profile.get("countries", []))
+            st.markdown("**Genres**")
+            render_tag_chips(profile.get("genres", []))
+            st.markdown("**Moods**")
+            render_tag_chips(profile.get("moods", []))
+            st.markdown("**Themes**")
+            render_tag_chips(profile.get("themes", []))
+            st.markdown("**Countries**")
+            render_tag_chips(profile.get("countries", []))
         else:
             st.info("Add an interest or load the demo graph to build the profile.")
 
 with explanation_col:
-    st.subheader("Explanation")
+    st.subheader("Why these recommendations")
     with st.container(border=True):
         st.write(recommendation_summary)
         if top_reasons:
-            for reason, count in top_reasons:
-                st.write(f"{reason}: {count} shared matches")
+            st.markdown(
+                "Top shared signals: "
+                + " | ".join(f"`{reason}` ({count})" for reason, count in top_reasons)
+            )
         else:
             st.info("Recommendation explanations will appear here once the graph has enough overlap.")
 
 st.subheader("Recommendations")
 if recommendations:
-    for recommendation in recommendations:
+    progress_base = best_score if best_score > 0 else 1
+    for index, recommendation in enumerate(recommendations, start=1):
         with st.container(border=True):
-            st.markdown(f"### {recommendation['title']}")
+            st.markdown(f"### {index}. {recommendation['title']}")
             meta_left, meta_middle, meta_right = st.columns(3)
             with meta_left:
-                st.write(f"Type: {format_media_type(recommendation['type'])}")
+                st.write(f"**Type:** {format_media_type(recommendation['type'])}")
             with meta_middle:
-                st.write(f"Score: {recommendation['score']}")
+                st.write(f"**Score:** {recommendation['score']}")
             with meta_right:
-                st.write(f"Shared signals: {len(recommendation.get('reasons', []))}")
-            reasons = ", ".join(recommendation.get("reasons", [])) or "Shared taste signals"
-            st.write(f"Because: {reasons}")
-            st.progress(min(recommendation["score"] / 5, 1.0))
+                st.write(f"**Shared signals:** {len(recommendation.get('reasons', []))}")
+            reasons = recommendation.get("reasons", [])
+            if reasons:
+                st.markdown("**Because:** " + " ".join(f"`{reason}`" for reason in reasons))
+            else:
+                st.write("**Because:** Shared taste signals")
+            st.progress(min(recommendation["score"] / progress_base, 1.0))
 else:
     st.info("No recommendations yet. Add an interest, load the demo graph, or broaden the user's taste profile.")
