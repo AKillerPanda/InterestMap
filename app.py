@@ -2,6 +2,7 @@ from collections import Counter
 
 import streamlit as st
 
+from lib.mdl_importer import fetch_completed_dramas
 from lib.neo4j_client import get_database_name, test_connection
 from lib.recommender import (
     add_interest,
@@ -132,6 +133,58 @@ if reset_demo:
 if refresh_recommendations:
     st.rerun()
 
+st.subheader("Import from MyDramaList")
+with st.form("mdl_import_form", clear_on_submit=False):
+    mdl_username = st.text_input("MDL username", placeholder="YourMDLUsername")
+    mdl_submit = st.form_submit_button("Import completed list", use_container_width=True)
+
+if mdl_submit:
+    if not mdl_username.strip():
+        st.error("Enter your MyDramaList username.")
+    else:
+        with st.spinner(f"Fetching completed list for {mdl_username}..."):
+            try:
+                dramas = fetch_completed_dramas(mdl_username.strip())
+            except Exception as error:
+                dramas = []
+                st.error(str(error))
+
+        if dramas:
+            imported = 0
+            failed = 0
+            progress_bar = st.progress(0.0, text="Importing...")
+            log_lines = []
+
+            for idx, drama in enumerate(dramas):
+                title = drama["title"]
+                media_type = drama["type"]
+                country = drama["country"]
+                notes = f"country:{country}"
+
+                from lib.tagger import extract_tags as _extract_tags
+                tags = _extract_tags(title=title, media_type=media_type, notes=notes)
+                if country and country.lower() not in tags.get("countries", []):
+                    tags["countries"] = sorted({country.lower(), *tags.get("countries", [])})
+
+                try:
+                    add_interest(user_id=user_id, title=title, media_type=media_type, tags=tags)
+                    log_lines.append(f"✓ {title}")
+                    imported += 1
+                except Exception as err:
+                    log_lines.append(f"✗ {title} — {err}")
+                    failed += 1
+
+                progress_bar.progress((idx + 1) / len(dramas), text=f"Importing {idx + 1}/{len(dramas)}...")
+
+            progress_bar.empty()
+            st.success(f"Imported {imported} dramas from {mdl_username}. Failed: {failed}.")
+            with st.expander("Import log"):
+                st.code("\n".join(log_lines))
+            st.session_state["last_title"] = f"MDL import: {mdl_username}"
+            st.session_state["last_tags"] = None
+            st.rerun()
+
+st.divider()
 st.subheader("Add an interest")
 with st.form("add_interest_form", clear_on_submit=False):
     form_left, form_right = st.columns([1.1, 1])

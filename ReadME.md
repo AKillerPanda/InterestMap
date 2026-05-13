@@ -50,12 +50,14 @@ InterestMap/
 │   ├── __init__.py
 │   ├── neo4j_client.py      # Driver setup, connection test, database config
 │   ├── recommender.py       # Graph writes, recommendation queries, seed data
-│   └── tagger.py            # Rule-based tag extraction from title + notes
+│   ├── tagger.py            # Tag extraction (Kimchi Kimi-K2.6 if configured, else rule-based)
+│   └── mdl_importer.py      # MyDramaList completed-list importer
 │
 └── scripts/                 # Terminal utilities (also work as fallback demo)
     ├── test_connection.py   # Checks Neo4j is reachable
     ├── seed.py              # Seeds demo items into Neo4j
-    └── recommend.py         # Prints recommendations for demo-user to terminal
+    ├── recommend.py         # Prints recommendations for demo-user to terminal
+    └── import_mdl.py        # Imports a public MDL completed list into Neo4j
 ```
 
 ---
@@ -176,6 +178,17 @@ NEO4J_DATABASE=<your-database-name>
 
 `NEO4J_DATABASE` is the Aura instance database name (shown in Aura Console). If omitted, the driver default is used.
 
+Optional Kimchi LLM config for AI tag extraction:
+
+```env
+KIMCHI_API_KEY=<your-kimchi-bearer-token>
+KIMCHI_BASE_URL=https://llm.kimchi.dev/openai/v1
+KIMCHI_MODEL=kimi-k2.6
+```
+
+Compatibility aliases are also supported from your current `.env`:
+`Kimchi_api_key`, `kimi-k2.6_api_key`, `kimi-k2.6_url`, and `NEO4J_queryAPI_URL`.
+
 ### 3. Run the app
 
 ```bash
@@ -212,7 +225,7 @@ python scripts/recommend.py
 
 ## Known Limitations
 
-- Tag extraction is rule-based — it matches keywords in the title and notes, not a trained model
+- Tag extraction falls back to rule-based keywords when Kimchi credentials are not configured
 - Country detection is inferred from media type, not actual metadata
 - No user accounts — all data is keyed by a user id string you set in the sidebar
-- No scraping or external API calls — seed data is hardcoded in `lib/recommender.py`
+- MDL import depends on public profiles and may break if MyDramaList page structure changes

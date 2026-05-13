@@ -252,7 +252,14 @@ def clear_user_graph(user_id: str) -> None:
         raise RuntimeError("Neo4j connection details are missing")
 
     with driver.session(**get_session_kwargs()) as session:
+        # Remove the user node and all their relationship edges
         session.run("MATCH (u:User {id: $user_id}) DETACH DELETE u", user_id=user_id)
+        # Remove Item nodes that are now orphaned (no user likes them anymore)
+        session.run(
+            "MATCH (item:Item) "
+            "WHERE NOT (item)<-[:LIKES|WATCHED|READ|LISTENED_TO]-() "
+            "DETACH DELETE item"
+        )
     driver.close()
 
 
