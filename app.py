@@ -9,6 +9,7 @@ from lib.recommender import (
     batch_add_interests,
     clear_user_graph,
     get_graph_summary,
+    get_liked_titles,
     get_recommendations,
     initialize_constraints,
     seed_demo_graph,
@@ -300,9 +301,9 @@ with explanation_col:
         # LLM-generated explanation (cached in session state)
         if recommendations and graph_summary.get("liked_items", 0) > 0:
             if st.session_state["llm_explanation"] is None:
-                liked_titles = [r["title"] for r in recommendations]
+                user_liked = get_liked_titles(user_id, limit=10)
                 with st.spinner("Generating explanation..."):
-                    explanation = generate_explanation(recommendations, liked_titles)
+                    explanation = generate_explanation(recommendations, user_liked)
                 st.session_state["llm_explanation"] = explanation or ""
             if st.session_state["llm_explanation"]:
                 st.markdown(st.session_state["llm_explanation"])

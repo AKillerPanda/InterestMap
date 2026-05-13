@@ -198,13 +198,17 @@ def _ensure_graph_integrity(session) -> None:
 
 
 def initialize_constraints() -> None:
-    """Run once at app startup to create constraints. Safe to call multiple times."""
+    """Run once at app startup to create constraints only. Safe to call multiple times."""
     driver = get_driver()
     if driver is None:
         return
     try:
         with driver.session(**get_session_kwargs()) as session:
-            _ensure_graph_integrity(session)
+            for statement in CONSTRAINT_STATEMENTS:
+                try:
+                    session.run(statement)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -320,11 +324,17 @@ def clear_user_graph(user_id: str) -> None:
 
     with driver.session(**get_session_kwargs()) as session:
         session.run("MATCH (u:User {id: $user_id}) DETACH DELETE u", user_id=user_id)
+        # Remove items no longer liked by any user
         session.run(
             "MATCH (item:Item) "
             "WHERE NOT (item)<-[:LIKES|WATCHED|READ|LISTENED_TO]-() "
             "DETACH DELETE item"
         )
+        # Remove orphaned tag nodes
+        for label in ("Genre", "Mood", "Theme", "Creator", "Country"):
+            session.run(
+                f"MATCH (t:{label}) WHERE NOT (t)<-[]-() DETACH DELETE t"
+            )
 
 
 def get_graph_summary(user_id: str) -> dict:
@@ -434,6 +444,24 @@ def seed_demo_graph(user_id: str = DEMO_USER_ID) -> None:
         session.run(seed_cypher, user_id=user_id, items=normalized_items)
 
 
+def get_liked_titles(user_id: str, limit: int = 10) -> list[str]:
+    """Return titles the user has liked, most recently first."""
+    driver = get_driver()
+    if driver is None:
+        return []
+    try:
+        with driver.session(**get_session_kwargs()) as session:
+            result = session.run(
+                "MATCH (u:User {id: $user_id})-[:LIKES]->(i:Item) "
+                "RETURN i.title AS title LIMIT $limit",
+                user_id=user_id,
+                limit=limit,
+            )
+            return [r["title"] for r in result if r["title"]]
+    except Exception:
+        return []
+
+
 def get_recommendations(
     user_id: str,
     limit: int = 5,
@@ -459,36 +487,47 @@ def get_recommendations(
     WITH rec, collect(DISTINCT tag.name) AS reasons, count(DISTINCT tag) AS score
     RETURN rec.title AS title, rec.type AS type, score, reasons
     ORDER BY score DESC, title ASC
-    LIMIT $candidate_limit
+    SKIP $skip
+    LIMIT $limit
     """
 
     try:
         with driver.session(**get_session_kwargs()) as session:
             bounded_limit = max(1, limit)
-            candidate_limit = max(bounded_limit * max(1, candidate_multiplier), bounded_limit)
             result = session.run(
                 cypher,
                 user_id=user_id,
-                candidate_limit=candidate_limit,
+                skip=max(0, offset),
+                limit=bounded_limit,
             )
-            recommendations = []
-            for record in result:
-                recommendations.append(
+            recommendations = [
+                {
+                    "title": record["title"],
+                    "type": record["type"],
+                    "score": record["score"],
+                    "reasons": record["reasons"],
+                }
+                for record in result
+            ]
+
+            # If we've gone past the end, wrap back to the first page
+            if not recommendations and offset > 0:
+                result2 = session.run(
+                    cypher,
+                    user_id=user_id,
+                    skip=0,
+                    limit=bounded_limit,
+                )
+                recommendations = [
                     {
                         "title": record["title"],
                         "type": record["type"],
                         "score": record["score"],
                         "reasons": record["reasons"],
                     }
-                )
+                    for record in result2
+                ]
 
-            if not recommendations:
-                return []
-
-            start = max(0, offset) % len(recommendations)
-            end = start + bounded_limit
-            if end <= len(recommendations):
-                return recommendations[start:end]
-            return recommendations[start:] + recommendations[: end - len(recommendations)]
+            return recommendations
     except Exception as error:
         raise RuntimeError(f"Neo4j recommendation query failed: {error}") from error
