@@ -197,6 +197,18 @@ def _ensure_graph_integrity(session) -> None:
         ).consume()
 
 
+def initialize_constraints() -> None:
+    """Run once at app startup to create constraints. Safe to call multiple times."""
+    driver = get_driver()
+    if driver is None:
+        return
+    try:
+        with driver.session(**get_session_kwargs()) as session:
+            _ensure_graph_integrity(session)
+    except Exception:
+        pass
+
+
 def add_interest(user_id: str, title: str, media_type: str, tags: dict) -> None:
     driver = get_driver()
     if driver is None:
@@ -231,7 +243,6 @@ def add_interest(user_id: str, title: str, media_type: str, tags: dict) -> None:
     """
 
     with driver.session(**get_session_kwargs()) as session:
-        _ensure_graph_integrity(session)
         session.run(
             cypher,
             user_id=user_id,
@@ -243,7 +254,63 @@ def add_interest(user_id: str, title: str, media_type: str, tags: dict) -> None:
             themes=normalized_tags["themes"],
             countries=normalized_tags["countries"],
         )
-    driver.close()
+
+
+def batch_add_interests(user_id: str, items: list[dict]) -> tuple[int, int]:
+    """Import a list of {title, media_type, tags} dicts in one Neo4j transaction. Returns (imported, failed)."""
+    driver = get_driver()
+    if driver is None:
+        raise RuntimeError("Neo4j connection details are missing")
+
+    cypher = """
+    MERGE (u:User {id: $user_id})
+    WITH u
+    UNWIND $items AS item
+      MERGE (i:Item {title_key: item.title_key, type: item.media_type})
+      ON CREATE SET i.title = item.title
+      ON MATCH SET i.title = coalesce(i.title, item.title)
+      MERGE (u)-[:LIKES]->(i)
+      WITH i, item
+      UNWIND item.genres AS genre_name
+        MERGE (g:Genre {name: genre_name})
+        MERGE (i)-[:HAS_GENRE]->(g)
+      WITH i, item
+      UNWIND item.moods AS mood_name
+        MERGE (m:Mood {name: mood_name})
+        MERGE (i)-[:HAS_MOOD]->(m)
+      WITH i, item
+      UNWIND item.themes AS theme_name
+        MERGE (t:Theme {name: theme_name})
+        MERGE (i)-[:HAS_THEME]->(t)
+      WITH i, item
+      UNWIND item.countries AS country_name
+        MERGE (c:Country {name: country_name})
+        MERGE (i)-[:FROM_COUNTRY]->(c)
+    """
+
+    normalized = []
+    failed = 0
+    for item in items:
+        try:
+            title = _normalize_text(item["title"])
+            media_type = _normalize_media_type(item["media_type"])
+            tags = _normalize_tags(item.get("tags", {}))
+            normalized.append({
+                "title": title,
+                "title_key": _normalize_key(title),
+                "media_type": media_type,
+                **tags,
+            })
+        except Exception:
+            failed += 1
+
+    if not normalized:
+        return 0, failed
+
+    with driver.session(**get_session_kwargs()) as session:
+        session.run(cypher, user_id=user_id, items=normalized)
+
+    return len(normalized), failed
 
 
 def clear_user_graph(user_id: str) -> None:
@@ -252,15 +319,12 @@ def clear_user_graph(user_id: str) -> None:
         raise RuntimeError("Neo4j connection details are missing")
 
     with driver.session(**get_session_kwargs()) as session:
-        # Remove the user node and all their relationship edges
         session.run("MATCH (u:User {id: $user_id}) DETACH DELETE u", user_id=user_id)
-        # Remove Item nodes that are now orphaned (no user likes them anymore)
         session.run(
             "MATCH (item:Item) "
             "WHERE NOT (item)<-[:LIKES|WATCHED|READ|LISTENED_TO]-() "
             "DETACH DELETE item"
         )
-    driver.close()
 
 
 def get_graph_summary(user_id: str) -> dict:
@@ -275,19 +339,14 @@ def get_graph_summary(user_id: str) -> dict:
         }
 
     summary_cypher = """
-    MATCH (n)
-    WITH count(n) AS total_nodes
     OPTIONAL MATCH (u:User {id: $user_id})
+    WITH u, u IS NOT NULL AS user_exists
     OPTIONAL MATCH (u)-[:LIKES]->(liked:Item)
-    WITH total_nodes, u, count(DISTINCT liked) AS liked_items
-    OPTIONAL MATCH (u)-[:LIKES]->(liked:Item)
-    OPTIONAL MATCH (liked)-[:HAS_GENRE|HAS_MOOD|HAS_THEME|FROM_COUNTRY]->(tag)
-    OPTIONAL MATCH (rec:Item)-[:HAS_GENRE|HAS_MOOD|HAS_THEME|FROM_COUNTRY]->(tag)
-    WHERE u IS NOT NULL AND rec IS NOT NULL AND NOT (u)-[:LIKES]->(rec)
-    RETURN total_nodes,
-           u IS NOT NULL AS user_exists,
+    WITH u, user_exists, count(DISTINCT liked) AS liked_items
+    OPTIONAL MATCH (item:Item)
+    RETURN user_exists,
            liked_items,
-           count(DISTINCT rec) AS recommendation_candidates
+           count(DISTINCT item) AS total_nodes
     """
 
     try:
@@ -306,7 +365,7 @@ def get_graph_summary(user_id: str) -> dict:
                 "total_nodes": record["total_nodes"],
                 "user_exists": record["user_exists"],
                 "liked_items": record["liked_items"],
-                "recommendation_candidates": record["recommendation_candidates"],
+                "recommendation_candidates": record["total_nodes"] - record["liked_items"],
             }
     except Exception as error:
         return {
@@ -317,8 +376,6 @@ def get_graph_summary(user_id: str) -> dict:
             "recommendation_candidates": 0,
             "error": str(error),
         }
-    finally:
-        driver.close()
 
 
 def seed_demo_graph(user_id: str = DEMO_USER_ID) -> None:
@@ -373,16 +430,26 @@ def seed_demo_graph(user_id: str = DEMO_USER_ID) -> None:
         )
 
     with driver.session(**get_session_kwargs()) as session:
-        _ensure_graph_integrity(session)
         session.run("MATCH (u:User {id: $user_id}) DETACH DELETE u", user_id=user_id)
         session.run(seed_cypher, user_id=user_id, items=normalized_items)
-    driver.close()
 
 
-def get_recommendations(user_id: str, limit: int = 5) -> list[dict]:
+def get_recommendations(
+    user_id: str,
+    limit: int = 5,
+    offset: int = 0,
+    candidate_multiplier: int = 4,
+) -> list[dict]:
     driver = get_driver()
     if driver is None:
-        return DEMO_RECOMMENDATIONS[:limit]
+        if not DEMO_RECOMMENDATIONS:
+            return []
+        bounded_limit = max(1, limit)
+        start = max(0, offset) % len(DEMO_RECOMMENDATIONS)
+        end = start + bounded_limit
+        if end <= len(DEMO_RECOMMENDATIONS):
+            return DEMO_RECOMMENDATIONS[start:end]
+        return DEMO_RECOMMENDATIONS[start:] + DEMO_RECOMMENDATIONS[: end - len(DEMO_RECOMMENDATIONS)]
 
     cypher = """
     MATCH (u:User {id: $user_id})-[:LIKES]->(liked:Item)
@@ -392,12 +459,18 @@ def get_recommendations(user_id: str, limit: int = 5) -> list[dict]:
     WITH rec, collect(DISTINCT tag.name) AS reasons, count(DISTINCT tag) AS score
     RETURN rec.title AS title, rec.type AS type, score, reasons
     ORDER BY score DESC, title ASC
-    LIMIT $limit
+    LIMIT $candidate_limit
     """
 
     try:
         with driver.session(**get_session_kwargs()) as session:
-            result = session.run(cypher, user_id=user_id, limit=limit)
+            bounded_limit = max(1, limit)
+            candidate_limit = max(bounded_limit * max(1, candidate_multiplier), bounded_limit)
+            result = session.run(
+                cypher,
+                user_id=user_id,
+                candidate_limit=candidate_limit,
+            )
             recommendations = []
             for record in result:
                 recommendations.append(
@@ -408,8 +481,14 @@ def get_recommendations(user_id: str, limit: int = 5) -> list[dict]:
                         "reasons": record["reasons"],
                     }
                 )
-            return recommendations
+
+            if not recommendations:
+                return []
+
+            start = max(0, offset) % len(recommendations)
+            end = start + bounded_limit
+            if end <= len(recommendations):
+                return recommendations[start:end]
+            return recommendations[start:] + recommendations[: end - len(recommendations)]
     except Exception as error:
         raise RuntimeError(f"Neo4j recommendation query failed: {error}") from error
-    finally:
-        driver.close()
