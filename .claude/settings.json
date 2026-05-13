@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://llm.kimchi.dev/anthropic",
+    "ANTHROPIC_API_KEY": "",
+    "ANTHROPIC_AUTH_TOKEN": "castai_v1_c2625932617de74a56117c7c9317505ec65e0add7b07036539126ded6075fbdf_6c5f77d5",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  }
+}

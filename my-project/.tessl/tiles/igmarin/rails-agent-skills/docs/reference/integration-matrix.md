@@ -1,0 +1,253 @@
+# Integration Matrix — Rails Agent Skills
+
+Integration matrix: which skill connects to which and in what order.
+
+---
+
+## Format
+
+- `A → B` means: after A, B typically follows
+- `[checkpoint]` indicates explicit pause point
+- `[gate]` indicates mandatory gate
+
+---
+
+## Complete Workflows
+
+### TDD Feature Loop (Main)
+
+```text
+skills/context/load-context
+    ↓
+skills/testing/plan-tests
+    ↓
+skills/testing/write-tests → [checkpoint: Test Feedback]
+    ↓
+[checkpoint: Implementation Proposal]
+    ↓
+Implement
+    ↓
+[gate: Linters + Full Suite]
+    ↓
+skills/patterns/write-yard-docs
+    ↓
+code-review → skills/code-quality/respond-to-review (if feedback) → PR
+```
+
+### Feature from Scratch
+
+```text
+skills/context/load-context
+    ↓
+create-prd → [gate: PRD approved]
+    ↓
+generate-tasks
+    ↓
+[TDD Feature Loop for each task]
+```
+
+### Feature DDD-First
+
+```text
+skills/context/load-context
+    ↓
+create-prd
+    ↓
+skills/ddd/define-domain-language → skills/ddd/review-domain-boundaries → skills/ddd/model-domain
+    ↓
+generate-tasks
+    ↓
+[TDD Feature Loop]
+```
+
+### Bug Fix
+
+```text
+triage-bug
+    ↓
+plan-tests
+    ↓
+[gate: Write failing reproduction spec]
+    ↓
+Minimal fix
+    ↓
+Verify passes + no regressions
+    ↓
+code-review
+```
+
+### Refactoring
+
+```text
+refactor-code
+    ↓
+[gate: Characterization tests pass]
+    ↓
+Extract in small steps
+    ↓
+Verify after each step
+    ↓
+code-review
+```
+
+### New Engine
+
+```text
+create-engine
+    ↓
+[gate: Engine specs fail]
+    ↓
+test-engine
+    ↓
+document-engine
+    ↓
+create-engine-installer
+    ↓
+review-engine
+    ↓
+release-engine
+    ↓
+upgrade-engine
+```
+
+### Engine Extraction
+
+```text
+extract-engine
+    ↓
+refactor-code
+    ↓
+[gate: Characterization tests]
+    ↓
+create-engine
+    ↓
+test-engine
+```
+
+### GraphQL Feature
+
+```text
+define-domain-language
+    ↓
+implement-graphql
+    ↓
+plan-tests
+    ↓
+[TDD Feature Loop]
+    ↓
+review-migration (if DB changes)
+    ↓
+security-check
+```
+
+### External API Integration
+
+```text
+create-prd
+    ↓
+generate-tasks
+    ↓
+plan-tests
+    ↓
+integrate-api-client
+    ↓
+write-yard-docs
+    ↓
+code-review
+```
+
+---
+
+## Integrations by Skill
+
+### create-prd
+| Next | When |
+|------|------|
+| generate-tasks | Always after PRD approved |
+| plan-tickets | Optional — if tickets needed in tracker |
+
+### generate-tasks
+| Next | When |
+|------|------|
+| plan-tests | To start development |
+| plan-tickets | If tickets needed on board |
+
+### plan-tests
+| Next | When |
+|------|------|
+| write-tests | To write the spec |
+
+### write-tests
+| Next | When |
+|------|------|
+| create-service-object | If feature requires service |
+| integrate-api-client | If integrating external API |
+| implement-background-job | If there are jobs |
+| review-migration | If there is a migration |
+| implement-graphql | If it's GraphQL |
+
+### create-service-object
+| Next | When |
+|------|------|
+| test-service | To test the service |
+| write-yard-docs | Document the public service |
+
+### code-review
+| Next | When |
+|------|------|
+| security-check | If there are security concerns |
+| review-architecture | If there are architecture issues |
+| respond-to-review | If feedback received |
+
+---
+
+## Quick Decision Matrix
+
+```text
+New to project?
+  ├─ Yes → load-context → setup-environment
+  └─ No → What do you need?
+
+       Plan?
+       ├─ Yes → create-prd → generate-tasks
+       └─ No → Implement?
+
+            Bug?
+            ├─ Yes → triage-bug
+            └─ No → Refactor?
+                 ├─ Yes → refactor-code
+                 └─ No → plan-tests → write-tests
+
+                      Type?
+                      ├─ Service → create-service-object → test-service
+                      ├─ API integration → integrate-api-client
+                      ├─ Background job → implement-background-job
+                      ├─ Migration → review-migration
+                      ├─ GraphQL → implement-graphql
+                      ├─ Authorization → implement-authorization
+                      ├─ Performance → optimize-performance
+                      └─ Engine → create-engine
+
+Review?
+  └─ code-review → (security-check | review-architecture) → respond-to-review
+```
+
+---
+
+## Checkpoints and Gates
+
+| Name | Type | Defined in | Purpose |
+|------|------|------------|---------|
+| Test Feedback | checkpoint | plan-tests | Confirm correct test before implementing |
+| Implementation Proposal | checkpoint | write-tests | Approve approach before code |
+| Linters + Suite | gate | workflow-guide.md | All linters and tests pass |
+| PRD Approved | gate | create-prd | Don't implement without approved PRD |
+| Characterization Tests | gate | refactor-code | Tests pass on current code before refactor |
+| Engine Specs | gate | create-engine | Specs fail before implementing engine |
+
+---
+
+## See also
+
+- [Skill Catalog](skill-catalog.md) — Complete skills list
+- [Workflows Index](../workflows/) — Step-by-step workflows

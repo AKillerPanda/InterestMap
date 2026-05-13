@@ -1,0 +1,21 @@
+{
+  "name": "my-project",
+  "mode": "vendored",
+  "dependencies": {
+    "simon/skills": {
+      "version": "1.0.3"
+    },
+    "tech-leads-club/agent-skills": {
+      "version": "81e7e0dd3abe314aa004ec276c1d64643d2bd6c0",
+      "source": "https://github.com/tech-leads-club/agent-skills",
+      "include": {
+        "skills": [
+          "mermaid-studio"
+        ]
+      }
+    },
+    "igmarin/rails-agent-skills": {
+      "version": "5.1.4"
+    }
+  }
+}
